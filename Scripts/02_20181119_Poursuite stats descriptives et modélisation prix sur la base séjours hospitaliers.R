@@ -13,7 +13,7 @@ public2018$logGHSPrix <- log(public2018$GHS.PRI)
 public2018$Gravite <- as.character(substr(public2018$GHM.NRO, 6, 6))
 public2018$CMD <- as.character(substr(public2018$GHM.NRO, 1, 2))
 
-
+library(Rcmdr)
 #####################################################################
 ############# A. STATISTIQUES DESCRPTIVES ###########################
 #####################################################################
