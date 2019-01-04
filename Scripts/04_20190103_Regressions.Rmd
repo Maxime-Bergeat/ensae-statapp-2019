@@ -1,0 +1,154 @@
+---
+title: "Différents modèles de régression à tester pour l'analyse des séjours hospitaliers"
+output: html_notebook
+---
+
+Dans ce notebook, on cherche à estimer et comparer (en termes d'indices de prix produits, notamment) plusieurs modèles de régression pour l'analyse du prix des séjours hospitaliers.
+
+
+## Préparation des données 
+
+```{r}
+
+library(ggplot2)
+library(FactoMineR)
+library(factoextra)
+library(explor)
+library(MASS)
+library(caret)
+library(leaps)
+library(IndexNumR)
+#####################################################################
+############# A. PREPARATION DONNEES  ###############################
+#####################################################################
+
+# Champ : 2017, public et privé 
+# Pondération : nombre de séjours (normalisé pour éviter d'avoir 
+# des problèmes numériques pour les CAH)
+# Variables actives : tranches de prix, gravité, nombre de nuitées, 
+# âge moyen, CMD, type d'hôpital
+
+
+setwd("C:/Users/maxim/Documents/ensae-statapp-2019/Data/Données tarification")
+df <- read.csv("data_compile_scraping_20190102.csv", sep = ",", stringsAsFactors = FALSE,
+                       dec = ".", encoding = "UTF-8")
+df$cmd.cod<-as.factor(df$cmd.cod)
+
+# Variable de gravité
+df$Gravite <- as.character(substr(df$ghm.nro, 6, 6))
+df$Gravite[!(df$Gravite %in% c("1", "2", "3", "4", "J", "T"))] = "X"
+```
+
+On utilise l'année 2017 pour fitter les modèles, et on se restreint aux remboursements pour les établissements publics. Par ailleurs, on se restreint aux maladies avec au moins un séjour et on exclut les séances et les codes inconnus. Dans la suite on travaille avec la variable logarithme du prix qu'on cherche à expliquer.
+```{r}
+donnees_2017 <- subset(df, annee == 2017)
+donnees_2017_public <- subset(donnees_2017, type == "pub")
+
+
+# Par ailleurs, on ne conserve les maladies pour lesquels il y au moins un séjour et on exclut le séances.
+donnees_2017_public <- subset(donnees_2017_public, effectif > 0) #60 observations supprimées
+donnees_2017_public <- subset(donnees_2017_public,!(cmd.cod %in% c(28,90))) # 26 séjours non pris en compte
+donnees_2017_public$logPrix <- log(donnees_2017_public$ghs.pri)
+qplot(donnees_2017$ghs.pri)
+qplot(donnees_2017_public$logPrix)
+```
+
+## Premiers modèles basiques 
+
+### Un modèle simple
+
+Premier modèle avec l'ensemble des variables et le logarithme du prix du séjour expliqué.
+```{r}
+## Création poids normalisé
+nb_sejours_moy <- mean(donnees_2017_public$effectif)
+donnees_2017_public$poids_norm <- donnees_2017_public$effectif/nb_sejours_moy
+modele_1_basique <- lm(data = donnees_2017_public, logPrix~cmd.cod+dcs.mco+seu.bas+seu.hau+nuitées.moy+nuitées.sigma+nuitées.min+nuitées.max+nuitées.mode+nuitées.med+nuitées.0.1+décès..+age.moy+age.sigma+diagnostics.moy+actes.moy+actes.classants.moy+actes.non.classants + Gravite, weights = poids_norm)
+summary(modele_1_basique)
+# R² de 85%, pas mal mais modèle avec beaucoup de variables y compris des paramètres endogènes (seuils haut et bas).
+
+```
+
+On obtient un R² de 80%. Il est en particulier très intéressant de constater qu'à autres paramètres fixés (notamment le nombre de diagnostics et de nuitées), le prix du séjour a tendance a diminuer avec la gravité du séjour considéré.
+
+### Sélection de modèles
+Pour regarder, sélection stepwise sur ces variables. On utilise la pondération BIC et la méthode stepwise pour sélectionner les variables
+```{r}
+modele_2_stepwise <- stepAIC(modele_1_basique, direction = "both", k = log(length(donnees_2017_public)),
+                      trace = FALSE)
+summary(modele_2_stepwise)
+```
+
+On peut également adopter une approche de type machine learning (séparation des données en échantillon d'apprentissage et test) pour sélectioner le modèle avec le meilleur pouvoir prédictif.
+
+```{r}
+# Pour reproduire les résultats si besoin
+set.seed(20190103)
+# Validation croisée de type k-fold ici (séparation de l'échantillon en 5 avec 4/5 pour le train et 1/5 pour le test)
+train.control <- trainControl(method = "cv", number = 5)
+# Train the model
+step.model <- train(logPrix ~ cmd.cod + nuitées.moy + nuitées.sigma + nuitées.min + nuitées.max + nuitées.mode + nuitées.med + nuitées.0.1 + décès.. + age.moy + age.sigma + diagnostics.moy + actes.moy + Gravite, data = donnees_2017_public, weights = poids_norm, 
+                    na.action = na.omit,
+                    method = "leapBackward", 
+                    tuneGrid = data.frame(nvmax = 1:30),
+                    trControl = train.control
+                    )
+step.model$results
+step.model$bestTune
+
+```
+
+On peut ici sélectionner les modèles les "meilleurs" (au sens du RMSE, erreur moyenne de prédiction) en fonction du nombre de variables qu'on cherche à inclure. Rsquared représente le coefficient de corrélation linéaire entre le logarithme du prix observé et la valeur prédite par le modèle. Il est intéressant de noter qu'après l'ajout d'un certain nombre de variables, il n'est plus intéressant d'ajouter des variables dans le modèle (en termes de pouvoir prédictif). On peut par exemple noter que le modèle avec 22 variable fonctionne plutôt bien.
+```{r}
+coef(step.model$finalModel,22)
+```
+
+## Autres modèles plus malins
+
+On peut également tester un modèle plus élaboré suite aux discussions à la Drees et aux premières analyses descriptives réalisées. En particulier, on peut en particulier : 
+- Effectuer quelques regroupements pour la catégorie majeure de diagnostic
+- Ne pas prendre en compte les variables liées intrinséquement à la fixation du prix pour expliquer le prix (par exemple les seuils haut et bas)
+- Réduire significativement le nombre de variables utilisées
+- Utiliser des variables croisées avec la variable de gravité
+- Choisir un set de variables.
+
+## Calcul d'indices de prix
+Pour cela, à voir, mais il faudrait a priori reprendre la méthodologie développée dans le papier du BLS. On pourrait alors obtenir un indice de prix par GHM où on mettrait en regard le prix en période 0 (base de l'indice, par exemple 2009 ou 2010 pour nous) avec le prix en 2017 (indice de prix standard) PUIS on pourrait à la place utiliser le prix ajusté des covaiables (ie prix prédit par le modèle) pour obtenir l'indice de prix ajusté. A voir si on ne fait pas plutôt avec les deux prix prédits par le modèle (année de référence et année considérée...). Ensuite, on peut agréger les indices calculés au niveau du GHM en calculant les indices de Laspeyres (plutôt Laspeyres pour faire comme Insee) ou Paasche pour avoir un indice global.
+NB : à ce stade, je ne comprends pas comment construire un indice absolu et non relatif (entre deux années), car je ne vois pas conceptuellement  comment "mettre toutes les covariables à 0" pour avoir le prix pur du séjour à l'hôpital.
+
+
+### Calcul indices de prix simples
+
+Ici on calcule les indices de prix (base 2010) pour les GHM présents de 2010 à 2017, puis on calcule les indices de prix non corrigés (sans prise en compte de la modélisation pour le moment). On pourra calculer ensuite en choisissant un ou plusieurs modèles des indices de prix ajsutés des covariables incluses dans les modèles
+
+
+```{r}
+# Calcul des indices de prix base 2010 (indices de Laspeyres) pour le public et le privé séparément
+
+data_ip <- subset(df, annee %in% c(2010,2011, 2012, 2013, 2014, 2015, 2016, 2017))
+data_ip <- subset(data_ip, ghs.pri > 0)
+# Mettre les effectifs NA à 0.
+data_ip[is.na(data_ip)] <- 0
+# Besoin d'avoir les années de 1 à 8 pour construire l'indice des prix
+data_ip$periode <- as.integer(data_ip$annee - 2009)
+data_ip_public <- subset(data_ip, type == "pub")
+data_ip_prive <- subset(data_ip, type == "pri")
+
+# On ne conserve que les ghm qui apparaissent tous les ans (une, deux ou trois fois)
+table_comptage1 <- as.data.frame(table(data_ip_public$ghm.nro))
+table_comptage2 <- as.data.frame(table(data_ip_prive$ghm.nro))
+table_comptage1$Var1<- as.character(table_comptage1$Var1)
+table_comptage2$Var1<- as.character(table_comptage2$Var1)
+table_comptage1 <- subset(table_comptage1, Freq %in% c(8, 16, 24, 32, 40))
+table_comptage2 <- subset(table_comptage2, Freq %in% c(8, 16, 24, 32, 40))
+# 2172 et 2139 GHM seulement, on en perd plusieurs centaines, à vérifier d'où ils viennent.
+
+data_ip_public <- subset(data_ip_public, ghm.nro %in% table_comptage1$Var1, select = c(ghm.nro, ghs.pri, effectif, periode))
+data_ip_prive <- subset(data_ip_prive, ghm.nro %in% table_comptage2$Var1, select = c(ghm.nro, ghs.pri, effectif, periode))
+
+priceIndex(data_ip_public, "ghs.pri", "effectif", "periode", indexMethod = "laspeyres", prodID = "ghm.nro", output = "fixedbase")
+priceIndex(data_ip_prive, "ghs.pri", "effectif", "periode", indexMethod = "laspeyres", prodID = "ghm.nro", output = "fixedbase")
+
+```
+
+
+La baisse est plus forte dans le public que dans le privé d'après ces indices. Il ne reste "plus qu'à" remplacer par les prix choisis si on veut avoir des indices de prix corrigés des covariables (sous réserve de choisir un ou plusieurs modèles).
