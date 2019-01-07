@@ -152,3 +152,63 @@ priceIndex(data_ip_prive, "ghs.pri", "effectif", "periode", indexMethod = "laspe
 
 
 La baisse est plus forte dans le public que dans le privé d'après ces indices. Il ne reste "plus qu'à" remplacer par les prix choisis si on veut avoir des indices de prix corrigés des covariables (sous réserve de choisir un ou plusieurs modèles).
+
+
+
+## Régression de logPrix sur les variables croisées
+
+S'inspirant des statistiques descriptives, on souhaite maintenant regarder l'effet des CMD et des prix d'excédant en conditionnant par les niveaux de gravité. Nous avions en effet remarqué que l'effet de EXH.PRI sur le remboursement variait selon les niveaux de gravités. D'autre part, au vu de la différence d'effet sur le remoursement, les CMD semblaient pouvoir être regroupées entre catégories à fort aggravement (CMD 22 et au-delà pour lesquelles le remboursement augmente fortement avec la gravité) et les autres (pour lequel la hausse selon la gravité demeure relativement limitée).
+
+Comme les stat desc le suggéraient, on pourrait avoir une relation : 
+$$GHS.PRI = A + B*JOURNALIER + \sum_{i=1}^4 C_i*EXH.PRI*1_{gravit=i} \\ + \sum_{i=1}^4 D_i*1_{cmd.gr=1}*1_{gravit=i} + \sum_{i=1}^4 D_i*1_{cmd.gr=0}*1_{gravit=i}$$
+```{r}
+#variable cmd.gr pour le sous-groupe des CMD 22 et plus
+donnees_2017_public$cmd.gr = (donnees_2017_public$cmd.cod == 22 | donnees_2017_public$cmd.cod == 23 | donnees_2017_public$cmd.cod == 24 | donnees_2017_public$cmd.cod == 25 | donnees_2017_public$cmd.cod == 26)
+```
+
+### Modèle restreint sans les poids
+
+On propose donc la regression suivante, ici sans les poids :
+
+```{r}
+modele_crois_sansPoids <- lm(data = donnees_2017_public, logPrix~ seu.hau + exb.journalier + cmd.gr*Gravite + exh.pri*Gravite)
+summary(modele_crois_sansPoids)
+```
+
+On constate que si l'effet du prix correspondant au seuil haut peu bien varier conditionnellement aux niveaux de gravité (notamment pour les fortes gravités où il y aurait un sous-remboursement relatif), la pertience du conditionnement de la gravité par les deux sous-groupe de CMD se pose : les coefficients sont peu précis.
+
+
+### Modèle restreint avec les poids
+
+On procède de même avec les poids :
+
+```{r}
+modele_crois_avecPoids <- lm(data = donnees_2017_public, logPrix~ seu.hau + exb.journalier + cmd.gr*Gravite + exh.pri*Gravite, weights = poids_norm)
+summary(modele_crois_avecPoids)
+```
+
+Avec les poids, la variance sur les coefficients affectant les variables croisées $gravité*exh.pri$ se trouve réduite. Par contre ceux des variables $cmd.gr*grave$ restent peu pertinent une fois la variable cmd.gr et exh.pri présente !
+
+
+### Modèle sans variable croisé sur les CMD
+
+En retirant cette derniere variable croisé pour ne plus garder que cmd.gr notre distinction entre les deux groupes de CMD, on obtient un modèle restreint en variables mais visiblement assez explicatif.
+
+Remarquons que contrôlant par les prix excédentaires bas et haut, l'effet d'appartenance aux CMD 22 et plus est en fait négatif sur le logPrix de remboursement. Ceci peut s'interpréter de deux façon : soit les séjours concernés et réguliers dans leur durée sont moins bien remboursés relativement aux autres CMD ; soit dans ces quelques CMD graves les dépassements de durée sont mieux couverts (relativement à ce qu'il en est pour les autres) car les patients sont à la fois plus probables de dépasser les seuils haut et le cas échéant de présenter des aggravements couteux.
+
+```{r}
+modele_crois_avecPoids <- lm(data = donnees_2017_public, logPrix~ seu.hau + exb.journalier + cmd.gr + exh.pri*Gravite, weights = poids_norm)
+summary(modele_crois_avecPoids)
+```
+
+
+
+## Retour au modèle plus général
+
+In fine, on conserve notre indicatrice cindant l'espace des CMD en deux (à partir de 22) et les variables croisés des EXH.PRI et gravité. On y ajoute les cinq autres variables sélectionnés plus haut pour produire le modèle alternatif ci-dessous : les dummy variables de CMD sont maintenant réduite à une seul et on ajoute 6 variables croisées sur les prix.
+
+
+```{r}
+modele_total_avecPoids <- lm(data = donnees_2017_public, logPrix~ seu.hau + exb.journalier + cmd.gr + exh.pri*Gravite + nuitées.max + décès.. + age.moy + age.sigma + actes.moy, weights = poids_norm)
+summary(modele_total_avecPoids)
+```

@@ -1,0 +1,10 @@
+name: Publish Document
+title:
+username:
+account: rpubs
+server: rpubs.com
+hostUrl: rpubs.com
+appId: https://api.rpubs.com/api/v1/document/455843/2d8b353eee75454ebe25f7bd875666da
+bundleId: https://api.rpubs.com/api/v1/document/455843/2d8b353eee75454ebe25f7bd875666da
+url: http://rpubs.com/Maxime_Bergeat/455843
+when: 1546796510.11043
